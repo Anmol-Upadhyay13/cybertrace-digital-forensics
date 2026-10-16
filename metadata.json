@@ -1,0 +1,6 @@
+{
+  "name": "CyberTrace - Digital Forensics & Chain of Custody",
+  "description": "Enterprise-grade digital forensics investigation and chain of custody management platform with cryptographic SHA-256 integrity verification, verifiable audit trails, and evidence tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

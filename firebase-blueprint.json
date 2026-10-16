@@ -1,0 +1,135 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authorized forensic investigator, custodian, or administrator profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user identifier (USR-XXX)" },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "format": "email" },
+        "role": {
+          "type": "string",
+          "enum": ["Administrator", "Lead Investigator", "Investigator", "Evidence Custodian", "Read-Only Auditor"]
+        },
+        "badgeNumber": { "type": "string", "maxLength": 50 },
+        "department": { "type": "string", "maxLength": 100 },
+        "active": { "type": "boolean" },
+        "lastSignIn": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role", "badgeNumber", "active", "createdAt"]
+    },
+    "Investigation": {
+      "title": "Investigation",
+      "description": "Digital forensic investigation case file",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^CASE-[0-9]{4}-[0-9]{4}$" },
+        "title": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "category": { "type": "string" },
+        "priority": { "type": "string", "enum": ["Critical", "High", "Medium", "Low"] },
+        "status": { "type": "string", "enum": ["Active", "Under Review", "Pending Legal", "Closed", "Archived"] },
+        "leadInvestigatorId": { "type": "string" },
+        "assignedInvestigatorIds": { "type": "array" },
+        "evidenceIds": { "type": "array" },
+        "tags": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "retentionYears": { "type": "number" }
+      },
+      "required": ["id", "title", "category", "priority", "status", "leadInvestigatorId", "createdAt"]
+    },
+    "EvidenceItem": {
+      "title": "EvidenceItem",
+      "description": "Forensically preserved electronic evidence artifact",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^EVD-[0-9]{4}-[0-9]{4}$" },
+        "caseId": { "type": "string" },
+        "description": { "type": "string", "maxLength": 500 },
+        "category": { "type": "string" },
+        "originalFileName": { "type": "string" },
+        "storedFileName": { "type": "string" },
+        "fileSizeBytes": { "type": "number" },
+        "mimeType": { "type": "string" },
+        "sha256Baseline": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sourceDevice": { "type": "string" },
+        "collectorName": { "type": "string" },
+        "collectorBadge": { "type": "string" },
+        "collectionLocation": { "type": "string" },
+        "collectionMethod": { "type": "string" },
+        "currentCustodianId": { "type": "string" },
+        "currentCustodianName": { "type": "string" },
+        "currentLocation": { "type": "string" },
+        "custodyState": { "type": "string" },
+        "isLockedForTransfer": { "type": "boolean" },
+        "registeredAt": { "type": "string" }
+      },
+      "required": ["id", "caseId", "category", "originalFileName", "sha256Baseline", "currentCustodianId", "registeredAt"]
+    },
+    "CustodyTransfer": {
+      "title": "CustodyTransfer",
+      "description": "Chain of custody transfer record with dual-party digital acknowledgment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^TRF-[0-9]{4}-[0-9]{4}$" },
+        "evidenceId": { "type": "string" },
+        "caseId": { "type": "string" },
+        "initiatingUserId": { "type": "string" },
+        "fromCustodianId": { "type": "string" },
+        "toCustodianId": { "type": "string" },
+        "transferReason": { "type": "string" },
+        "transferMethod": { "type": "string" },
+        "destinationLocation": { "type": "string" },
+        "status": { "type": "string", "enum": ["Draft", "Requested", "Awaiting Acknowledgment", "Completed", "Rejected", "Cancelled"] },
+        "requestedAt": { "type": "string" }
+      },
+      "required": ["id", "evidenceId", "caseId", "fromCustodianId", "toCustodianId", "status", "requestedAt"]
+    },
+    "AuditEvent": {
+      "title": "AuditEvent",
+      "description": "Tamper-evident append-only cryptographic audit record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sequenceNumber": { "type": "number" },
+        "timestamp": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "action": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["SUCCESS", "DENIED", "FAILED"] },
+        "details": { "type": "string" },
+        "prevHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "required": ["id", "sequenceNumber", "timestamp", "actorId", "action", "targetId", "outcome", "prevHash", "hash"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Secure user directory"
+    },
+    "/cases/{caseId}": {
+      "schema": "Investigation",
+      "description": "Investigation cases catalog"
+    },
+    "/evidence/{evidenceId}": {
+      "schema": "EvidenceItem",
+      "description": "Digital forensic evidence vault"
+    },
+    "/custodyTransfers/{transferId}": {
+      "schema": "CustodyTransfer",
+      "description": "Chain of custody state machine ledger"
+    },
+    "/auditEvents/{eventId}": {
+      "schema": "AuditEvent",
+      "description": "Append-only immutable audit trail"
+    }
+  }
+}

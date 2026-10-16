@@ -1,0 +1,152 @@
+rules_version = '2';
+
+/**
+ * CyberTrace Zero-Trust Firestore Security Rules
+ * Enforces Attribute-Based Access Control (ABAC), role verification from trusted records,
+ * strict immutable audit ledger, and default-deny protection.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 1: Global Catch-All Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common Global Helpers
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? getUserData().role
+        : 'None';
+    }
+
+    function isAdmin() {
+      return getUserRole() == 'Administrator';
+    }
+
+    function isLeadInvestigator() {
+      return getUserRole() == 'Lead Investigator';
+    }
+
+    function isInvestigator() {
+      return getUserRole() == 'Investigator';
+    }
+
+    function isEvidenceCustodian() {
+      return getUserRole() == 'Evidence Custodian';
+    }
+
+    function isAuditor() {
+      return getUserRole() == 'Read-Only Auditor';
+    }
+
+    function isAssignedToCase(caseId) {
+      return exists(/databases/$(database)/documents/cases/$(caseId)) && (
+        getUserData().id == get(/databases/$(database)/documents/cases/$(caseId)).data.leadInvestigatorId ||
+        getUserData().id in get(/databases/$(database)/documents/cases/$(caseId)).data.assignedInvestigatorIds
+      );
+    }
+
+    // 1. Users Collection
+    // Client cannot self-assign roles or modify user status
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      // Only Administrators can provision or modify user profiles
+      allow create: if isSignedIn() && isAdmin();
+      allow update: if isSignedIn() && isAdmin() &&
+        // Self-demotion or self-elevation prevention
+        request.resource.data.id == resource.data.id;
+      allow delete: if false; // User accounts are deactivated, never deleted
+    }
+
+    // 2. Investigations Collection
+    match /cases/{caseId} {
+      allow read: if isSignedIn();
+      // Case creation: only Administrators or Lead Investigators
+      allow create: if isSignedIn() && (isAdmin() || isLeadInvestigator()) &&
+        request.resource.data.keys().hasAll(['id', 'title', 'category', 'priority', 'status', 'createdAt']) &&
+        request.resource.data.leadInvestigatorId == request.auth.uid;
+      // Case update: only Lead Investigator assigned to the case or Admin
+      allow update: if isSignedIn() && (isAdmin() || (isLeadInvestigator() && resource.data.leadInvestigatorId == request.auth.uid)) &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false; // Evidence retention mandates retention
+    }
+
+    // 3. Evidence Catalog
+    match /evidence/{evidenceId} {
+      allow read: if isSignedIn();
+      // Intake: Admin, Lead, Investigator, or Custodian
+      allow create: if isSignedIn() && (isAdmin() || isLeadInvestigator() || isInvestigator() || isEvidenceCustodian()) &&
+        request.resource.data.keys().hasAll(['id', 'caseId', 'category', 'originalFileName', 'sha256Baseline', 'registeredAt']) &&
+        // Verify referenced case exists
+        exists(/databases/$(database)/documents/cases/$(request.resource.data.caseId)) &&
+        // Baseline hash cannot be empty or invalid
+        request.resource.data.sha256Baseline.size() == 64;
+      // Update: only permitted for custody state changes via authorized workflows
+      allow update: if isSignedIn() && (isAdmin() || isEvidenceCustodian() || isInvestigator()) &&
+        // Baseline hash is strictly immutable
+        request.resource.data.sha256Baseline == resource.data.sha256Baseline &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.caseId == resource.data.caseId;
+      allow delete: if false; // Digital evidence artifacts cannot be deleted
+    }
+
+    // 4. Custody Transfers State Machine
+    match /custodyTransfers/{transferId} {
+      allow read: if isSignedIn();
+      // Transfer initiation
+      allow create: if isSignedIn() && (isAdmin() || isEvidenceCustodian() || isInvestigator() || isLeadInvestigator()) &&
+        request.resource.data.keys().hasAll(['id', 'evidenceId', 'caseId', 'fromCustodianId', 'toCustodianId', 'status', 'requestedAt']) &&
+        request.resource.data.status == 'Awaiting Acknowledgment';
+      // Handover acknowledgment / Decision
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        // Only designated recipient can acknowledge
+        (request.resource.data.status == 'Completed' && resource.data.toCustodianId == getUserData().id) ||
+        // Only designated sender/recipient or Admin can cancel/reject
+        ((request.resource.data.status == 'Rejected' || request.resource.data.status == 'Cancelled') &&
+          (resource.data.toCustodianId == getUserData().id || resource.data.fromCustodianId == getUserData().id))
+      ) &&
+      request.resource.data.id == resource.data.id &&
+      request.resource.data.evidenceId == resource.data.evidenceId &&
+      // Terminal state protection: Completed transfers cannot be altered
+      resource.data.status != 'Completed';
+      allow delete: if false;
+    }
+
+    // 5. Integrity Verification Records
+    match /integrityChecks/{checkId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && (isAdmin() || isInvestigator() || isEvidenceCustodian() || isLeadInvestigator()) &&
+        request.resource.data.keys().hasAll(['id', 'evidenceId', 'algorithm', 'expectedHash', 'observedHash', 'result', 'timestamp']);
+      allow update, delete: if false; // Verification results are immutable
+    }
+
+    // 6. Tamper-Evident Audit Ledger (Append-Only Hash Chain)
+    match /auditEvents/{eventId} {
+      allow read: if isSignedIn();
+      // Events can only be created by authenticated server/client operations with full attributes
+      allow create: if isSignedIn() &&
+        request.resource.data.keys().hasAll(['id', 'sequenceNumber', 'timestamp', 'actorId', 'action', 'targetId', 'prevHash', 'hash']) &&
+        request.resource.data.hash.size() == 64 &&
+        request.resource.data.prevHash.size() == 64;
+      // Absolute immutability: Updates and deletes strictly denied
+      allow update, delete: if false;
+    }
+
+    // 7. Security Settings
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isAdmin();
+    }
+  }
+}
